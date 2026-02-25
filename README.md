@@ -160,7 +160,7 @@ SELECT * INTO #all_sales FROM (
 
 ## 🔍 Аналитические запросы
 
-### 1. Общие KPI по отелю
+### 1. Динамика метрик отеля по годам (YoY)
 
 ```sql
 WITH YearlyMetrics AS (
@@ -199,29 +199,29 @@ ORDER BY year;
 
 <img width="1040" height="114" alt="image" src="https://github.com/user-attachments/assets/2aac2026-0445-4318-ba2f-86b94973392f" />
 
+Выводы по метрикам: 
+Процент отмен на протяжении трех лет стабильно высокий - 37%
+В 2019 году выручка резко поднялась на 259%, однако в следующего году упала на 39%.Скорее всего это связано с пандемией
+С другой стороны, средняя стоимость за ночь в отеле выросла с 89 до 111 $.  
 
 
-
-### 2. Динамика выручки по годам (YoY)
+### 2. Динамика выручки по типам отелей
 
 ```sql
-WITH YearlyMetrics AS (
-    SELECT
-        arrival_date_year AS year,
-        SUM(CASE WHEN is_canceled = 0 
-            THEN (stays_in_weekend_nights + stays_in_week_nights) * adr ELSE 0 END) AS total_revenue
-    FROM #all_sales
-    GROUP BY arrival_date_year
-)
-SELECT
-    year,
-    total_revenue,
-    LAG(total_revenue) OVER (ORDER BY year) AS prev_year_revenue,
-    ROUND((total_revenue - LAG(total_revenue) OVER (ORDER BY year)) * 100.0 
-          / NULLIF(LAG(total_revenue) OVER (ORDER BY year), 0), 2) AS revenue_change_yoy_pct
-FROM YearlyMetrics
-ORDER BY year;
+Select arrival_date_year, hotel as type_hotel, 
+        COUNT(*) AS total_bookings,
+        SUM(CASE WHEN is_canceled = 1 THEN 1 ELSE 0 END) AS canceled_bookings,
+        ROUND(CAST(SUM(CASE WHEN is_canceled = 1 THEN 1 ELSE 0 END) AS DECIMAL(10,2)) / COUNT(*) * 100, 0) AS cancellation_rate_pct,
+        SUM(CASE WHEN is_canceled = 0 THEN (stays_in_weekend_nights + stays_in_week_nights) * adr ELSE 0 END) AS total_revenue,
+        ROUND(AVG(CASE WHEN is_canceled = 0 THEN adr ELSE NULL END), 0) AS avg_adr,
+        ROUND(AVG(CASE WHEN is_canceled = 0 THEN (stays_in_weekend_nights + stays_in_week_nights) ELSE NULL END), 0) AS avg_length_of_stay
+FROM #all_sales
+GROUP BY arrival_date_year,hotel
+ORDER BY arrival_date_year
 ```
+
+<img width="788" height="145" alt="image" src="https://github.com/user-attachments/assets/9de75ae3-6a36-4db9-a302-143adb154a74" />
+
 
 ### 3. Чистая выручка по сегментам (Net Retention)
 
