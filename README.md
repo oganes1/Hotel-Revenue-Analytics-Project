@@ -29,8 +29,9 @@
 - `MS SQL Server`
 
 ---
-## 🗄️ Создание базы данных в MS SQL Server 
+## Создание базы данных в MS SQL Server 
 В первую очередь, на сервере был создан новая база данных "Project", куда данные импортировались из Excel файла
+
 <img width="333" height="329" alt="image" src="https://github.com/user-attachments/assets/b3f1d113-9dd8-44bc-a6c8-b762fce80d7c" />
 
 
@@ -126,6 +127,8 @@ CREATE TABLE #all_sales (
 
 ### 1. Подготовка данных
 
+Из-за того, что данные были импортированы из Excel, было решено привести их к более удобным типам данных, для этого использовался Alter table. 
+После этого, нужно было привести строковые значения "Null" в тип данных Null. 
 ```sql
 USE [Project];
 
@@ -160,18 +163,44 @@ SELECT * INTO #all_sales FROM (
 ### 1. Общие KPI по отелю
 
 ```sql
-SELECT
-    COUNT(*) AS total_bookings,
-    SUM(CASE WHEN is_canceled = 1 THEN 1 ELSE 0 END) AS canceled_bookings,
-    ROUND(CAST(SUM(CASE WHEN is_canceled = 1 THEN 1 ELSE 0 END) AS DECIMAL(10,2)) 
-          / COUNT(*) * 100, 0) AS cancellation_rate_pct,
-    SUM(CASE WHEN is_canceled = 0 
-        THEN (stays_in_weekend_nights + stays_in_week_nights) * adr ELSE 0 END) AS total_revenue,
-    ROUND(AVG(CASE WHEN is_canceled = 0 THEN adr ELSE NULL END), 0) AS avg_adr,
-    ROUND(AVG(CASE WHEN is_canceled = 0 
-        THEN (stays_in_weekend_nights + stays_in_week_nights) ELSE NULL END), 0) AS avg_length_of_stay
-FROM #all_sales;
+WITH YearlyMetrics AS (
+    SELECT 
+        arrival_date_year AS year,
+        COUNT(*) AS total_bookings,
+        SUM(CASE WHEN is_canceled = 1 THEN 1 ELSE 0 END) AS canceled_bookings,
+        ROUND(CAST(SUM(CASE WHEN is_canceled = 1 THEN 1 ELSE 0 END) AS DECIMAL(10,2)) / COUNT(*) * 100, 0) AS cancellation_rate_pct,
+        SUM(CASE WHEN is_canceled = 0 THEN (stays_in_weekend_nights + stays_in_week_nights) * adr ELSE 0 END) AS total_revenue,
+        ROUND(AVG(CASE WHEN is_canceled = 0 THEN adr ELSE NULL END), 0) AS avg_adr,
+        ROUND(AVG(CASE WHEN is_canceled = 0 THEN (stays_in_weekend_nights + stays_in_week_nights) ELSE NULL END), 0) AS avg_length_of_stay
+    FROM #all_sales
+    GROUP BY arrival_date_year
+)
+SELECT 
+    year,
+    total_bookings,
+    canceled_bookings,
+    cancellation_rate_pct,
+    ROUND(total_revenue, 0) AS total_revenue,
+    avg_adr,
+    avg_length_of_stay,
+    -- Выручка прошлого года (LAG)
+    ROUND(LAG(total_revenue) OVER (ORDER BY year), 0) AS prev_year_revenue,
+    -- Абсолютное изменение
+    ROUND(total_revenue - LAG(total_revenue) OVER (ORDER BY year), 0) AS revenue_change_abs,
+    -- Процентное изменение YoY (ключевая метрика)
+    ROUND(
+        (total_revenue - LAG(total_revenue) OVER (ORDER BY year)) * 100.0 / 
+        NULLIF(LAG(total_revenue) OVER (ORDER BY year), 0), 
+        2
+    ) AS revenue_change_yoy_pct
+FROM YearlyMetrics
+ORDER BY year;
 ```
+
+<img width="1040" height="114" alt="image" src="https://github.com/user-attachments/assets/2aac2026-0445-4318-ba2f-86b94973392f" />
+
+
+
 
 ### 2. Динамика выручки по годам (YoY)
 
