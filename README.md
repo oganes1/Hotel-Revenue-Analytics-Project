@@ -18,11 +18,11 @@
 
 ## 📊 О проекте
 
-Этот проект представляет собой полный цикл аналитики для отельного бизнеса на основе данных за 3 года (2018–2020). Основная цель — переход от анализа **валовой выручки** к **чистой прибыли** с учётом:
+Этот проект представляет собой полный цикл аналитики для отельного бизнеса на основе данных за 3 года (2018–2020). Основная цель — оценка показателей бизнеса на основе выручки, количества бронирований, среднего чека с учётом:
 
 - ✅ Комиссий каналов продаж  
 - ✅ Выручки от питания (F&B)  
-- ✅ Процент отмен бронирований  
+- ✅ Процента отмен бронирований  
 - ✅ Сегментации клиентов  
 
 **Cтек:**
@@ -199,13 +199,13 @@ ORDER BY year;
 
 <img width="1040" height="114" alt="image" src="https://github.com/user-attachments/assets/2aac2026-0445-4318-ba2f-86b94973392f" />
 
-Выводы по метрикам: 
-Процент отмен на протяжении трех лет стабильно высокий - 37% /n
-В 2019 году выручка резко поднялась на 259%, однако в следующего году упала на 39%.Скорее всего это связано с пандемией
-С другой стороны, средняя стоимость за ночь в отеле выросла с 89 до 111 $.  
+Выводы: 
+1. Процент отмен на протяжении трех лет стабильно высокий - 37% 
+2. В 2019 году выручка резко поднялась на 259%, однако в следующего году упала на 39%
+3. Средняя стоимость за ночь за 3 года выросла с 89 до 111 $.  
 
 
-### 2. Динамика выручки по типам отелей
+### 2. Динамика метрик по типам отелей
 
 ```sql
 Select arrival_date_year, hotel as type_hotel, 
@@ -222,71 +222,125 @@ ORDER BY arrival_date_year
 
 <img width="788" height="145" alt="image" src="https://github.com/user-attachments/assets/9de75ae3-6a36-4db9-a302-143adb154a74" />
 
+Выводы: 
+1. Основная категория отелей в доле выручки и бронирований - отели в черте города.
+2. У отелей в черте города процент отмен выше почти в 2 раза, чем у resort отелей.
+3. Средняя стоимость за ночь и среднее количество дней отдыха выше у resort отелей.
 
 ### 3. Чистая выручка по сегментам (Net Retention)
 
 ```sql
 WITH SegmentFinancials AS (
-    SELECT
+    SELECT 
         s.market_segment,
         s.is_canceled,
         CAST(s.adr AS DECIMAL(18,4)) * (s.stays_in_weekend_nights + s.stays_in_week_nights) AS gross_rev,
-        CAST(s.adr AS DECIMAL(18,4)) * (s.stays_in_weekend_nights + s.stays_in_week_nights) 
-            * ISNULL(ms.Discount, 0) AS commission,
-        ISNULL(CAST(mc.Cost AS DECIMAL(18,4)), 0) * (s.adults + s.children) 
-            * (s.stays_in_weekend_nights + s.stays_in_week_nights) AS fb_rev
+        CAST(s.adr AS DECIMAL(18,4)) * (s.stays_in_weekend_nights + s.stays_in_week_nights) * ISNULL(ms.Discount, 0) AS commission,
+        ISNULL(mc.Cost, 0) * (s.adults + s.children) * (s.stays_in_weekend_nights + s.stays_in_week_nights) AS fb_rev
     FROM #all_sales s
     LEFT JOIN market_segment ms ON s.market_segment = ms.market_segment
     LEFT JOIN meal_cost mc ON s.meal = mc.meal
 )
-SELECT
+SELECT 
     market_segment,
     SUM(CASE WHEN is_canceled = 0 THEN gross_rev ELSE 0 END) AS total_gross_revenue,
     SUM(CASE WHEN is_canceled = 0 THEN (gross_rev - commission + fb_rev) ELSE 0 END) AS total_net_revenue,
-    CAST(SUM(CASE WHEN is_canceled = 0 THEN (gross_rev - commission + fb_rev) ELSE 0 END) AS DECIMAL(18,6))
-        / NULLIF(CAST(SUM(CASE WHEN is_canceled = 0 THEN gross_rev ELSE 0 END) AS DECIMAL(18,6)), 0) 
-        AS net_retention_ratio
+    -- Коэффициент сохранения выручки (Net / Gross)
+    -- Используем DECIMAL(18,6) и NULLIF для защиты от деления на ноль
+    CAST(
+        SUM(CASE WHEN is_canceled = 0 THEN (gross_rev - commission + fb_rev) ELSE 0 END) AS DECIMAL(18,6)
+    ) / NULLIF(
+        CAST(SUM(CASE WHEN is_canceled = 0 THEN gross_rev ELSE 0 END) AS DECIMAL(18,6)), 
+        0
+    ) AS net_retention_ratio
 FROM SegmentFinancials
+Where market_segment <> 'Complementary'
 GROUP BY market_segment
 ORDER BY net_retention_ratio DESC;
 ```
+<img width="488" height="167" alt="image" src="https://github.com/user-attachments/assets/4171ef8b-6178-473d-b70a-715ac6cce1b3" />
+
+Выводы: 
+1. Основная категория отелей в доле выручки и бронирований - отели в черте города.
+2. У отелей в черте города процент отмен выше почти в 2 раза, чем у resort отелей.
+3. Средняя стоимость за ночь и среднее количество дней отдыха выше у resort отелей.
 
 ### 4. Сезонность по месяцам
 
 ```sql
-WITH MonthlyStats AS (
-    SELECT
-        arrival_date_year,
+WITH MonthlyStats AS(
+    SELECT 
+        
         arrival_date_month,
+        -- Маппинг месяцев для сортировки
         CASE arrival_date_month
             WHEN 'January' THEN 1 WHEN 'February' THEN 2 WHEN 'March' THEN 3
             WHEN 'April' THEN 4 WHEN 'May' THEN 5 WHEN 'June' THEN 6
             WHEN 'July' THEN 7 WHEN 'August' THEN 8 WHEN 'September' THEN 9
             WHEN 'October' THEN 10 WHEN 'November' THEN 11 WHEN 'December' THEN 12
         END AS month_num,
-        SUM(CASE WHEN is_canceled = 0 
-            THEN (stays_in_weekend_nights + stays_in_week_nights) * adr ELSE 0 END) AS revenue
+        COUNT(*) AS bookings,
+        SUM(CASE WHEN is_canceled = 0 THEN (stays_in_weekend_nights + stays_in_week_nights) * adr ELSE 0 END) AS revenue,
+        CAST(SUM(CASE WHEN is_canceled = 1 THEN 1 ELSE 0 END) AS DECIMAL(10,2)) / COUNT(*) * 100 AS cancel_rate
     FROM #all_sales
-    GROUP BY arrival_date_year, arrival_date_month
+    GROUP BY  arrival_date_month
 )
-SELECT * FROM MonthlyStats
-ORDER BY arrival_date_year, month_num;
+SELECT 
+    arrival_date_month,
+    bookings,
+    revenue,
+    cancel_rate
+FROM MonthlyStats
+ORDER BY month_num;
 ```
+<img width="359" height="248" alt="image" src="https://github.com/user-attachments/assets/932f5b56-d863-4073-b50d-3e6189689a8e" />
+
+Выводы: 
+1. Пик бронирований июль-октябрь 
+2. Наибольший процент отмен в апреле и июне. 
 
 ### 5. Анализ отмен по типу питания
 
 ```sql
-SELECT
-    s.meal,
-    mc.Cost AS meal_price,
-    COUNT(*) AS total_bookings,
-    CAST(SUM(CASE WHEN s.is_canceled = 1 THEN 1 ELSE 0 END) AS DECIMAL(10,2)) 
-        / COUNT(*) * 100 AS cancellation_rate_pct
-FROM #all_sales s
-LEFT JOIN meal_cost mc ON s.meal = mc.meal
-GROUP BY s.meal, mc.Cost
-ORDER BY cancellation_rate_pct ASC;
+WITH Meals_year AS(
+SELECT arrival_date_year,#all_sales.meal as meal, round(sum(Cost),2) as meal_sum
+FROM #all_sales
+LEFT JOIN meal_cost ON #all_sales.meal = meal_cost.meal
+WHERE #all_sales.meal <> 'Undefined'
+GROUP BY arrival_date_year,#all_sales.meal)
+
+SELECT 
+    arrival_date_year,
+    meal,
+    meal_sum,
+    sum(meal_sum) over (partition by arrival_date_year, meal order by arrival_date_year)/
+    sum(meal_sum) over (partition by arrival_date_year order by arrival_date_year) as meal_percentage
+FROM Meals_year
 ```
+<img width="335" height="249" alt="image" src="https://github.com/user-attachments/assets/884ad4a5-4ebd-456f-93ad-8bc20d865589" />
+
+Выводы: 
+1. BB (Bed and Breakfast) - занимает наибольшую долю в выручке, однако его процент от общей выручки снизился с 71% до 60%
+2. SC (Self catering) - занимал всего 4% в 2018 году, но вырос до 27% в 2020 году.
+
+### 6. Сравнение новых и постоянных клиентов
+```sql
+SELECT arrival_date_year,
+    CASE WHEN is_repeated_guest = 1 THEN 'Repeated Guest' ELSE 'New Guest' END AS guest_type,
+    COUNT(*) AS total_bookings,
+    CAST(SUM(CASE WHEN is_canceled = 1 THEN 1 ELSE 0 END) AS DECIMAL(10,2)) / COUNT(*) * 100 AS cancellation_rate_pct,
+    SUM(CASE WHEN is_canceled = 0 THEN (stays_in_weekend_nights + stays_in_week_nights) * adr ELSE 0 END) AS total_revenue,
+    AVG(CASE WHEN is_canceled = 0 THEN (stays_in_weekend_nights + stays_in_week_nights) * adr ELSE NULL END) AS avg_revenue_per_booking
+FROM #all_sales
+GROUP BY arrival_date_year,is_repeated_guest
+ORDER BY arrival_date_year;
+```
+<img width="633" height="145" alt="image" src="https://github.com/user-attachments/assets/0d0c1a31-9272-465f-bd66-60b7d8e37f99" />
+
+Выводы: 
+1. Постоянные клиенты стали гораздо реже отменяют бронирование (с 54% до 4%)
+2. Постоянные клиенты отменяют бронирование реже, чем новые
+3. Доля постоянных клиентов в выручке очень мала
 
 ---
 
