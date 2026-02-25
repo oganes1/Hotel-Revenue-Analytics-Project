@@ -1,0 +1,271 @@
+USE [Project]
+
+GO
+
+-- В первую очередь стоит создать таблицу #all_sales, в которой объединим данные за 3 года
+
+SELECT * INTO #all_sales FROM (
+    SELECT * FROM sale_2018 UNION ALL
+    SELECT * FROM sale_2019 UNION ALL
+    SELECT * FROM sale_2020
+) AS t;
+SELECT COUNT(*) FROM sale_2020
+
+
+
+-- Обзор деятельности предприятия
+-- Процент отмены бронирования составляет 37%
+-- Выручка за 3 года - 30 540 723.96 $
+-- Общая прибыль за 3 года - 
+-- Средняя цена номер - 98$
+-- Средний период проживания 3 дня 
+SELECT 
+    COUNT(*) AS total_bookings,
+    SUM(CASE WHEN is_canceled = 1 THEN 1 ELSE 0 END) AS canceled_bookings,
+    ROUND(CAST(SUM(CASE WHEN is_canceled = 1 THEN 1 ELSE 0 END) AS DECIMAL(10,2)) / COUNT(*) * 100, 0) AS cancellation_rate_pct,
+    -- Выручка считаем только по состоявшимся бронированиям (is_canceled = 0)
+    SUM(CASE WHEN is_canceled = 0 THEN (stays_in_weekend_nights + stays_in_week_nights) * adr ELSE 0 END) AS total_revenue,
+    ROUND(AVG(CASE WHEN is_canceled = 0 THEN adr ELSE NULL END), 0) AS avg_adr,
+    ROUND(AVG(CASE WHEN is_canceled = 0 THEN (stays_in_weekend_nights + stays_in_week_nights) ELSE NULL END), 0) AS avg_length_of_stay
+FROM #all_sales;
+
+-- Метрики в разрезе лет + отклонения
+
+WITH YearlyMetrics AS (
+    SELECT 
+        arrival_date_year AS year,
+        COUNT(*) AS total_bookings,
+        SUM(CASE WHEN is_canceled = 1 THEN 1 ELSE 0 END) AS canceled_bookings,
+        ROUND(CAST(SUM(CASE WHEN is_canceled = 1 THEN 1 ELSE 0 END) AS DECIMAL(10,2)) / COUNT(*) * 100, 0) AS cancellation_rate_pct,
+        SUM(CASE WHEN is_canceled = 0 THEN (stays_in_weekend_nights + stays_in_week_nights) * adr ELSE 0 END) AS total_revenue,
+        ROUND(AVG(CASE WHEN is_canceled = 0 THEN adr ELSE NULL END), 0) AS avg_adr,
+        ROUND(AVG(CASE WHEN is_canceled = 0 THEN (stays_in_weekend_nights + stays_in_week_nights) ELSE NULL END), 0) AS avg_length_of_stay
+    FROM #all_sales
+    GROUP BY arrival_date_year
+)
+SELECT 
+    year,
+    total_bookings,
+    canceled_bookings,
+    cancellation_rate_pct,
+    ROUND(total_revenue, 0) AS total_revenue,
+    avg_adr,
+    avg_length_of_stay,
+    -- Выручка прошлого года (LAG)
+    ROUND(LAG(total_revenue) OVER (ORDER BY year), 0) AS prev_year_revenue,
+    -- Абсолютное изменение
+    ROUND(total_revenue - LAG(total_revenue) OVER (ORDER BY year), 0) AS revenue_change_abs,
+    -- Процентное изменение YoY (ключевая метрика)
+    ROUND(
+        (total_revenue - LAG(total_revenue) OVER (ORDER BY year)) * 100.0 / 
+        NULLIF(LAG(total_revenue) OVER (ORDER BY year), 0), 
+        2
+    ) AS revenue_change_yoy_pct
+FROM YearlyMetrics
+ORDER BY year;
+
+-- Выручка по типам отелей
+
+Select arrival_date_year, hotel as type_hotel, 
+        COUNT(*) AS total_bookings,
+        SUM(CASE WHEN is_canceled = 1 THEN 1 ELSE 0 END) AS canceled_bookings,
+        ROUND(CAST(SUM(CASE WHEN is_canceled = 1 THEN 1 ELSE 0 END) AS DECIMAL(10,2)) / COUNT(*) * 100, 0) AS cancellation_rate_pct,
+        SUM(CASE WHEN is_canceled = 0 THEN (stays_in_weekend_nights + stays_in_week_nights) * adr ELSE 0 END) AS total_revenue,
+        ROUND(AVG(CASE WHEN is_canceled = 0 THEN adr ELSE NULL END), 0) AS avg_adr,
+        ROUND(AVG(CASE WHEN is_canceled = 0 THEN (stays_in_weekend_nights + stays_in_week_nights) ELSE NULL END), 0) AS avg_length_of_stay
+FROM #all_sales
+GROUP BY arrival_date_year,hotel
+ORDER BY arrival_date_year
+
+-- Выручка по типам питания
+WITH Meals_year AS(
+SELECT arrival_date_year,#all_sales.meal as meal, round(sum(Cost),2) as meal_sum
+FROM #all_sales
+LEFT JOIN meal_cost ON #all_sales.meal = meal_cost.meal
+WHERE #all_sales.meal <> 'Undefined'
+GROUP BY arrival_date_year,#all_sales.meal)
+
+SELECT 
+    arrival_date_year,
+    meal,
+    meal_sum,
+    sum(meal_sum) over (partition by arrival_date_year, meal order by arrival_date_year)/
+    sum(meal_sum) over (partition by arrival_date_year order by arrival_date_year) as meal_percentage
+FROM Meals_year
+
+
+
+-- Метрики по месяцам
+
+WITH MonthlyStats AS(
+    SELECT 
+        arrival_date_year,
+        arrival_date_month,
+        -- Маппинг месяцев для сортировки
+        CASE arrival_date_month
+            WHEN 'January' THEN 1 WHEN 'February' THEN 2 WHEN 'March' THEN 3
+            WHEN 'April' THEN 4 WHEN 'May' THEN 5 WHEN 'June' THEN 6
+            WHEN 'July' THEN 7 WHEN 'August' THEN 8 WHEN 'September' THEN 9
+            WHEN 'October' THEN 10 WHEN 'November' THEN 11 WHEN 'December' THEN 12
+        END AS month_num,
+        COUNT(*) AS bookings,
+        SUM(CASE WHEN is_canceled = 0 THEN (stays_in_weekend_nights + stays_in_week_nights) * adr ELSE 0 END) AS revenue,
+        CAST(SUM(CASE WHEN is_canceled = 1 THEN 1 ELSE 0 END) AS DECIMAL(10,2)) / COUNT(*) * 100 AS cancel_rate
+    FROM #all_sales
+    GROUP BY  arrival_date_year, arrival_date_month
+)
+SELECT arrival_date_year,
+    arrival_date_month,
+    bookings,
+    revenue,
+    cancel_rate
+FROM MonthlyStats
+ORDER BY arrival_date_year, month_num;
+
+
+
+-- Метрики по маркетинговым сегментам
+WITH SegmentFinancials AS (
+    SELECT 
+        s.market_segment,
+        s.is_canceled,
+        CAST(s.adr AS DECIMAL(18,4)) * (s.stays_in_weekend_nights + s.stays_in_week_nights) AS gross_rev,
+        CAST(s.adr AS DECIMAL(18,4)) * (s.stays_in_weekend_nights + s.stays_in_week_nights) * ISNULL(ms.Discount, 0) AS commission,
+        ISNULL(mc.Cost, 0) * (s.adults + s.children) * (s.stays_in_weekend_nights + s.stays_in_week_nights) AS fb_rev
+    FROM #all_sales s
+    LEFT JOIN market_segment ms ON s.market_segment = ms.market_segment
+    LEFT JOIN meal_cost mc ON s.meal = mc.meal
+)
+SELECT 
+    market_segment,
+    SUM(CASE WHEN is_canceled = 0 THEN gross_rev ELSE 0 END) AS total_gross_revenue,
+    SUM(CASE WHEN is_canceled = 0 THEN (gross_rev - commission + fb_rev) ELSE 0 END) AS total_net_revenue,
+    -- Коэффициент сохранения выручки (Net / Gross)
+    -- Используем DECIMAL(18,6) и NULLIF для защиты от деления на ноль
+    CAST(
+        SUM(CASE WHEN is_canceled = 0 THEN (gross_rev - commission + fb_rev) ELSE 0 END) AS DECIMAL(18,6)
+    ) / NULLIF(
+        CAST(SUM(CASE WHEN is_canceled = 0 THEN gross_rev ELSE 0 END) AS DECIMAL(18,6)), 
+        0
+    ) AS net_retention_ratio
+FROM SegmentFinancials
+Where market_segment <> 'Complementary'
+GROUP BY market_segment
+ORDER BY net_retention_ratio DESC;
+
+-- Сравнение новых и постоянных клиентов
+SELECT arrival_date_year,
+    CASE WHEN is_repeated_guest = 1 THEN 'Repeated Guest' ELSE 'New Guest' END AS guest_type,
+    COUNT(*) AS total_bookings,
+    CAST(SUM(CASE WHEN is_canceled = 1 THEN 1 ELSE 0 END) AS DECIMAL(10,2)) / COUNT(*) * 100 AS cancellation_rate_pct,
+    SUM(CASE WHEN is_canceled = 0 THEN (stays_in_weekend_nights + stays_in_week_nights) * adr ELSE 0 END) AS total_revenue,
+    AVG(CASE WHEN is_canceled = 0 THEN (stays_in_weekend_nights + stays_in_week_nights) * adr ELSE NULL END) AS avg_revenue_per_booking
+FROM #all_sales
+GROUP BY arrival_date_year,is_repeated_guest
+ORDER BY arrival_date_year;
+
+
+-- Как часто мы не предоставляем тот номер, который бронировали?
+SELECT 
+    reserved_room_type,
+    COUNT(*) AS total_reserved,
+    SUM(CASE WHEN reserved_room_type = assigned_room_type THEN 1 ELSE 0 END) AS matched,
+    CAST(SUM(CASE WHEN reserved_room_type = assigned_room_type THEN 1 ELSE 0 END) AS DECIMAL(10,2)) / COUNT(*) * 100 AS match_rate_pct,
+    -- Средняя выручка по броням, где номер совпал vs не совпал
+    AVG(CASE WHEN reserved_room_type = assigned_room_type AND is_canceled = 0 THEN adr ELSE NULL END) AS adr_matched,
+    AVG(CASE WHEN reserved_room_type <> assigned_room_type AND is_canceled = 0 THEN adr ELSE NULL END) AS adr_mismatched
+FROM #all_sales
+GROUP BY reserved_room_type
+ORDER BY total_reserved DESC;
+
+
+
+-- Считаем реальную выручку после вычета комиссий и с учетом питания
+SELECT 
+    s.distribution_channel,
+    s.market_segment AS sales_segment,
+    ms.Discount AS commission_rate,
+    COUNT(*) AS total_bookings,
+    -- Валовая выручка номерного фонда
+    SUM(CASE WHEN s.is_canceled = 0 THEN s.adr * (s.stays_in_weekend_nights + s.stays_in_week_nights) ELSE 0 END) AS gross_room_revenue,
+    -- Сумма комиссий (убыток)
+    SUM(CASE WHEN s.is_canceled = 0 THEN s.adr * (s.stays_in_weekend_nights + s.stays_in_week_nights) * ISNULL(ms.Discount, 0) ELSE 0 END) AS total_commissions,
+    -- Выручка от питания (дополнительный доход)
+    SUM(CASE WHEN s.is_canceled = 0 THEN mc.Cost * (s.adults + s.children) * (s.stays_in_weekend_nights + s.stays_in_week_nights) ELSE 0 END) AS total_fb_revenue,
+    -- Чистая выручка (Room - Commission + FB)
+    SUM(CASE WHEN s.is_canceled = 0 THEN 
+        (s.adr * (s.stays_in_weekend_nights + s.stays_in_week_nights) * (1 - ISNULL(ms.Discount, 0))) 
+        + (mc.Cost * (s.adults + s.children) * (s.stays_in_weekend_nights + s.stays_in_week_nights))
+    ELSE 0 END) AS net_total_revenue,
+    -- Средняя чистая выручка на бронирование
+    AVG(CASE WHEN s.is_canceled = 0 THEN 
+        (s.adr * (s.stays_in_weekend_nights + s.stays_in_week_nights) * (1 - ISNULL(ms.Discount, 0))) 
+        + (mc.Cost * (s.adults + s.children) * (s.stays_in_weekend_nights + s.stays_in_week_nights))
+    ELSE NULL END) AS avg_net_revenue_per_booking
+FROM #all_sales s
+LEFT JOIN market_segment ms ON s.market_segment = ms.market_segment
+LEFT JOIN meal_cost mc ON s.meal = mc.meal
+GROUP BY s.distribution_channel, s.market_segment, ms.Discount
+ORDER BY net_total_revenue DESC;
+
+
+-- Гипотеза: Гости с полным пансионом (FB/HB) реже отменяют бронь
+SELECT 
+    s.meal,
+    mc.Cost AS meal_price_component,
+    COUNT(*) AS total_bookings,
+    CAST(SUM(CASE WHEN s.is_canceled = 1 THEN 1 ELSE 0 END) AS DECIMAL(10,2)) / COUNT(*) * 100 AS cancellation_rate_pct,
+    AVG(s.adr) AS avg_room_adr,
+    -- Средняя дополнительная выручка с питания на бронь
+    AVG(CASE WHEN s.is_canceled = 0 THEN mc.Cost * (s.adults + s.children) * (s.stays_in_weekend_nights + s.stays_in_week_nights) ELSE 0 END) AS avg_fb_revenue_per_booking
+FROM #all_sales s
+LEFT JOIN meal_cost mc ON s.meal = mc.meal
+GROUP BY s.meal, mc.Cost
+ORDER BY avg_fb_revenue_per_booking DESC;
+
+
+-- Сколько чистых денег остается с каждого рубля валовой выручки
+WITH SegmentFinancials AS (
+    SELECT 
+        s.market_segment,
+        s.is_canceled,
+        -- Явно приводим к DECIMAL(18,4) перед вычислениями, чтобы избежать FLOAT
+        CAST(s.adr AS DECIMAL(18,4)) * (s.stays_in_weekend_nights + s.stays_in_week_nights) AS gross_rev,
+        CAST(s.adr AS DECIMAL(18,4)) * (s.stays_in_weekend_nights + s.stays_in_week_nights) * ISNULL(ms.Discount, 0) AS commission,
+        ISNULL(CAST(mc.Cost AS DECIMAL(18,4)), 0) * (s.adults + s.children) * (s.stays_in_weekend_nights + s.stays_in_week_nights) AS fb_rev
+    FROM #all_sales s
+    LEFT JOIN market_segment ms ON s.market_segment = ms.market_segment
+    LEFT JOIN meal_cost mc ON s.meal = mc.meal
+)
+SELECT 
+    market_segment,
+    SUM(CASE WHEN is_canceled = 0 THEN gross_rev ELSE 0 END) AS total_gross_revenue,
+    SUM(CASE WHEN is_canceled = 0 THEN (gross_rev - commission + fb_rev) ELSE 0 END) AS total_net_revenue,
+    -- Коэффициент сохранения выручки (Net / Gross)
+    -- Используем DECIMAL(18,6) для результата деления и NULLIF для защиты от деления на 0
+    CAST(
+        SUM(CASE WHEN is_canceled = 0 THEN (gross_rev - commission + fb_rev) ELSE 0 END) AS DECIMAL(18,6)
+    ) / NULLIF(
+        CAST(SUM(CASE WHEN is_canceled = 0 THEN gross_rev ELSE 0 END) AS DECIMAL(18,6)), 
+        0
+    ) AS net_retention_ratio
+FROM SegmentFinancials
+GROUP BY market_segment
+ORDER BY net_retention_ratio DESC;
+
+
+-- Выделяем бронирования, которые выглядят дорого, но приносят мало
+
+SELECT TOP 20
+    s.market_segment,
+    s.adr,
+    ms.Discount AS commission_rate,
+    (s.stays_in_weekend_nights + s.stays_in_week_nights) AS nights,
+    s.adr * (s.stays_in_weekend_nights + s.stays_in_week_nights) AS gross_value,
+    s.adr * (s.stays_in_weekend_nights + s.stays_in_week_nights) * (1 - ms.Discount) AS net_value
+FROM #all_sales s
+JOIN market_segment ms ON s.market_segment = ms.market_segment
+WHERE s.is_canceled = 0 
+  AND ms.Discount >= 0.30 -- Только высококомиссионные
+  AND s.adr > (SELECT AVG(adr) FROM #all_sales WHERE is_canceled = 0) -- Выше среднего ADR
+ORDER BY net_value ASC; -- Самые невыгодные сверху
